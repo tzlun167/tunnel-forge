@@ -261,16 +261,26 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           TUNNEL_FORGE_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload-keystore.jks
         run: |
-          for var in \
-            ANDROID_KEYSTORE_BASE64 \
-            ANDROID_KEYSTORE_PASSWORD \
-            ANDROID_KEY_ALIAS \
-            ANDROID_KEY_PASSWORD; do
-            if [[ -z "${!var}" ]]; then
-              echo "Secret ${var} not set - building UNSIGNED release APK instead" >&2
-              exit 0
-            fi
-          done
+          if [[ -z "${ANDROID_KEYSTORE_BASE64}" ]]; then
+            # No signing secrets in this fork: generate a throwaway keystore so
+            # the release APK is still signed (any signature installs fine
+            # via "unknown sources"). Password/alias are build-local only.
+            echo "No keystore secrets - generating a local self-signed keystore" >&2
+            KEYTOOL="$(find "${JAVA_HOME:-/usr/lib/jvm}" -name keytool -type f 2>/dev/null | head -n 1)"
+            if [[ -z "${KEYTOOL}" ]]; then KEYTOOL=keytool; fi
+            "${KEYTOOL}" -genkeypair -v \
+              -keystore "${TUNNEL_FORGE_ANDROID_KEYSTORE_PATH}" \
+              -storepass tunnelforge -keypass tunnelforge \
+              -alias tunnelforge -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=TunnelForge Local,O=Local,C=US"
+            chmod 600 "${TUNNEL_FORGE_ANDROID_KEYSTORE_PATH}"
+            {
+              echo "TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD=tunnelforge"
+              echo "TUNNEL_FORGE_ANDROID_KEY_ALIAS=tunnelforge"
+              echo "TUNNEL_FORGE_ANDROID_KEY_PASSWORD=tunnelforge"
+            } >> "${GITHUB_ENV}"
+            exit 0
+          fi
 
           printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${TUNNEL_FORGE_ANDROID_KEYSTORE_PATH}"
           chmod 600 "${TUNNEL_FORGE_ANDROID_KEYSTORE_PATH}"
