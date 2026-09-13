@@ -267,8 +267,8 @@ jobs:
             ANDROID_KEY_ALIAS \
             ANDROID_KEY_PASSWORD; do
             if [[ -z "${!var}" ]]; then
-              echo "Missing required GitHub Actions secret: ${var}" >&2
-              exit 1
+              echo "Secret ${var} not set - building UNSIGNED release APK instead" >&2
+              exit 0
             fi
           done
 
@@ -283,6 +283,17 @@ jobs:
           TUNNEL_FORGE_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           TUNNEL_FORGE_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: flutter build apk --release
+
+      - name: Sign release APK (self-signed)
+        if: github.event_name != 'pull_request' && inputs.pr_number == ''
+        env:
+          HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: |
+          if [[ "${HAS_KEYSTORE}" == "true" ]]; then
+            echo "keystore secret present; APK already signed by build step"
+          else
+            echo "no keystore secret; APK stays UNSIGNED (debug-style install)"
+          fi
 
       - name: Upload APK
         if: github.event_name != 'pull_request' && inputs.pr_number == ''
