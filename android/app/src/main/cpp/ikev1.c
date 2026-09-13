@@ -35,8 +35,8 @@ static unsigned s_ike_keymat_variants_log_once;
 #define TUNNEL_FORGE_KEYMAT_VARIANT 1
 #endif
 
-// IKE DH group 14 (MODP2048): must match Phase 1 proposal and mbedtls_mpi_read_binary below.
-#define IKE_DH_PUBKEY_BYTES 256
+// IKE DH group 2 (MODP1024): must match Phase 1 proposal and mbedtls_mpi_read_binary below.
+#define IKE_DH_PUBKEY_BYTES 128
 
 /* --- Diagnostics, sockets, ISAKMP crypto primitives (shared by Main and Quick Mode) --- */
 
@@ -128,7 +128,7 @@ static void ike_log_endpoint(const char *tag, const struct sockaddr *sa, socklen
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "%s: %s:%u", tag, host, (unsigned)ntohs(sin->sin_port));
 }
 
-extern const uint8_t rfc3526_modp2048_p[256];
+extern const uint8_t rfc2409_modp1024_p[128];
 
 static const uint8_t k_vid_rfc3947[IKE_VID_RFC3947_LEN] = {0x4a, 0x13, 0x1c, 0x81, 0x07, 0x03, 0x58, 0x45,
                                                            0x5c, 0x57, 0x28, 0xf2, 0x0e, 0x95, 0x45, 0x2f};
@@ -821,11 +821,11 @@ static size_t build_p1_sa(uint8_t *b, size_t cap) {
   util_write_be32(b + o, 1);
   o += 4;
 
-  /* Group 0x000e = MODP2048 (RFC 3526), required by default Libreswan l2tp-psk (modp2048). */
-  static const uint8_t attrs_aes[] = {0x80, 0x01, 0x00, 0x07, 0x80, 0x0e, 0x00, 0x80, 0x80, 0x02,
-                                      0x00, 0x02, 0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x0e};
-  static const uint8_t attrs_3des[] = {0x80, 0x01, 0x00, 0x05, 0x80, 0x02, 0x00, 0x02,
-                                       0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x0e};
+  /* Group 0x0002 = MODP1024 (RFC 2409), required by racoon ipsec-tools l2tp-psk (modp1024). */
+    static const uint8_t attrs_aes[] = {0x80, 0x01, 0x00, 0x07, 0x80, 0x0e, 0x00, 0x80, 0x80, 0x02,
+                                        0x00, 0x02, 0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x02};
+    static const uint8_t attrs_3des[] = {0x80, 0x01, 0x00, 0x05, 0x80, 0x02, 0x00, 0x02,
+                                         0x80, 0x03, 0x00, 0x01, 0x80, 0x04, 0x00, 0x02};
 
   /*
    * One ISAKMP Proposal with two Transform payloads (AES then 3DES). Libreswan 5.x rejects
@@ -1180,8 +1180,8 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   mbedtls_mpi P, G;
   mbedtls_mpi_init(&P);
   mbedtls_mpi_init(&G);
-  if (mbedtls_mpi_read_binary(&P, rfc3526_modp2048_p, sizeof(rfc3526_modp2048_p)) != 0 ||
-      mbedtls_mpi_lset(&G, 2) != 0 || mbedtls_dhm_set_group(&dhm, &P, &G) != 0) {
+  if (mbedtls_mpi_read_binary(&P, rfc2409_modp1024_p, sizeof(rfc2409_modp1024_p)) != 0 ||
+        mbedtls_mpi_lset(&G, 2) != 0 || mbedtls_dhm_set_group(&dhm, &P, &G) != 0) {
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: DH group setup failed");
     mbedtls_mpi_free(&P);
     mbedtls_mpi_free(&G);
@@ -1465,7 +1465,7 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   memcpy(ke_r_buf, am4.ke_r, am4.ke_r_len);
   ke_r_len = am4.ke_r_len;
   if (normalize_dh_value(ke_r_buf, &ke_r_len, sizeof(ke_r_buf), IKE_DH_PUBKEY_BYTES) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM4: responder KE is not a valid MODP2048 value");
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM4: responder KE is not a valid MODP1024 value");
     goto fail_fd;
   }
   memcpy(nr_buf, am4.nr, am4.nr_len);
@@ -1486,7 +1486,7 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
   }
   mbedtls_dhm_free(&dhm);
   if (normalize_dh_value(gxy, &gxy_len, sizeof(gxy), IKE_DH_PUBKEY_BYTES) != 0) {
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: DH shared secret is not a valid MODP2048 value");
+    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE: DH shared secret is not a valid MODP1024 value");
     goto fail_fd;
   }
 
