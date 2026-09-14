@@ -766,8 +766,13 @@ int l2tp_send_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, sock
     return -1;
   util_write_be16(pkt + 0, 0x4002);
   util_write_be16(pkt + 2, (uint16_t)tot);
-  util_write_be16(pkt + 4, s->tunnel_id);
-  util_write_be16(pkt + 6, s->session_id);
+  /* xl2tpd routes inbound data by the payload's tid/cid: the tid must be the
+   * tunnel id WE assigned (s->peer_tunnel_id, echoed in our SCCRQ AVP 9), and
+   * the cid must be the session id WE assigned (s->peer_session_id, echoed in
+   * our ICRQ AVP 14). s->tunnel_id/s->session_id hold the PEER-assigned values
+   * which are used on the receive path instead. */
+  util_write_be16(pkt + 4, s->peer_tunnel_id);
+  util_write_be16(pkt + 6, s->peer_session_id);
   memcpy(pkt + 8, ppp, ppp_len);
   return esp_encrypt_send(esp_fd, esp, peer, peer_len, pkt, tot);
 }
