@@ -289,9 +289,9 @@ jobs:
         if: github.event_name != 'pull_request' && inputs.pr_number == ''
         env:
           TUNNEL_FORGE_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload-keystore.jks
-          TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          TUNNEL_FORGE_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          TUNNEL_FORGE_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD: ${{ env.TUNNEL_FORGE_ANDROID_KEYSTORE_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
+          TUNNEL_FORGE_ANDROID_KEY_ALIAS: ${{ env.TUNNEL_FORGE_ANDROID_KEY_ALIAS || secrets.ANDROID_KEY_ALIAS }}
+          TUNNEL_FORGE_ANDROID_KEY_PASSWORD: ${{ env.TUNNEL_FORGE_ANDROID_KEY_PASSWORD || secrets.ANDROID_KEY_PASSWORD }}
         run: flutter build apk --release
 
       - name: Sign release APK (self-signed)
