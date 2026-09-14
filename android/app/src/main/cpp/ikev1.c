@@ -2059,16 +2059,27 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
           break;
       }
       if (is_initial_contact) {
-        /* racoon sent INITIAL-CONTACT instead of (or in addition to) an explicit
-         * QM2 rejection. Phase 1 is up and the SA exists; treat the ESP keys as
-         * usable so the caller proceeds to L2TP/PPP instead of tearing down. */
-        tunnel_log("Quick Mode: INITIAL-CONTACT received; proceeding with Phase 1 keys");
-        goto qm_initial_contact_done;
+        /* racoon sends an encrypted INITIAL-CONTACT right after the ISAKMP SA
+         * comes up (typical for the anonymous PSK setup). It is informational,
+         * NOT the QM2 reply: the real Quick Mode msg2 may follow shortly on the
+         * same socket. Keep waiting for the encrypted QM2 instead of tearing
+         * down or fabricating keys. */
+        tunnel_log("Quick Mode: INITIAL-CONTACT received; waiting for QM2 on same socket");
+        inlen = ike_send_recv(fd, (struct sockaddr *)&peer_active, peer_active_len, NULL, 0, in, sizeof(in), 8000,
+                              p1_prefix);
+        if (inlen < 28) {
+          tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "IKE MM msg4: no valid reply (after INITIAL-CONTACT)");
+          mbedtls_dhm_free(&dhm);
+          goto fail_fd;
+        }
+        ike_log_isakmp_summary("IKE MM msg4 (after INITIAL-CONTACT)", in, inlen);
       }
     }
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
-                      "Quick Mode: server replied with Informational Exchange (not QM2); ESP proposal likely rejected");
-    goto fail_fd;
+    if (in[18] == IKE_EXCH_INFO && (in[19] & IKE_FLAG_ENC) && util_read_be32(in + 20) != qm_mid) {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
+                        "Quick Mode: server replied with Informational Exchange (not QM2); ESP proposal likely rejected");
+      goto fail_fd;
+    }
   }
 
   if ((in[19] & IKE_FLAG_ENC) == 0 || util_read_be32(in + 20) != qm_mid) {
