@@ -520,7 +520,7 @@ static int l2tp_handshake_inner(int esp_fd, esp_keys_t *esp, const struct sockad
 
   // RFC 2661 sec 5.2.1 SCCRQ: AVP order and mandatory set (xl2tpd rejects SCCRQ without Firmware Revision).
   avp_u16(avps, &ao, L2TP_AVP_MSG_TYPE, L2TP_MSG_SCCRQ);
-  avp_u16(avps, &ao, 2, 0x0100); /* Protocol Version 1.0 */
+  avp_u16(avps, &ao, 2, 0x0110); /* Protocol Version 1.1 (xl2tpd requires >= 1.0; 1.1 is the common L2TPv2 negotiate value) */
   {
     uint8_t fc[4] = {0, 0, 0, 3};
     avp_write(avps, &ao, 3, fc, 4);
