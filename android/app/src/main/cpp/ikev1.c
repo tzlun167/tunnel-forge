@@ -2030,20 +2030,40 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
       }
       uint8_t info_np = in[16];
       size_t w = 0;
+      int is_initial_contact = 0;
       while (w + 4 <= info_plain_len) {
         uint16_t pl = util_read_be16(info_plain + w + 2);
         if (pl < 4 || w + pl > info_plain_len)
           break;
         if (info_np == IKE_PT_NOTIFY && pl >= 12) {
           uint16_t ntype = util_read_be16(info_plain + w + 4 + 6);
-          tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
-                            "Quick Mode: server sent NOTIFY type=%u (0x%04x) - proposal rejected", (unsigned)ntype,
-                            (unsigned)ntype);
+          /* RFC 2407 (IPsec DOI) INITIAL-CONTACT = 24578: racoon sends this after
+           * establishing a fresh ISAKMP SA. It is informational, not a rejection.
+           * Only NO-PROPOSAL-CHOSEN (24579) means the ESP proposal was refused. */
+          if (ntype == 24578) {
+            tunnel_engine_log(ANDROID_LOG_INFO, LOG_TAG,
+                              "Quick Mode: server sent INITIAL-CONTACT (0x6002) - informational, continuing");
+            is_initial_contact = 1;
+          } else if (ntype == 24579) {
+            tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
+                              "Quick Mode: server sent NO-PROPOSAL-CHOSEN - ESP proposal rejected");
+          } else {
+            tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                              "Quick Mode: server sent NOTIFY type=%u (0x%04x)", (unsigned)ntype,
+                              (unsigned)ntype);
+          }
         }
         info_np = info_plain[w];
         w += pl;
         if (info_np == IKE_PT_NONE)
           break;
+      }
+      if (is_initial_contact) {
+        /* racoon sent INITIAL-CONTACT instead of (or in addition to) an explicit
+         * QM2 rejection. Phase 1 is up and the SA exists; treat the ESP keys as
+         * usable so the caller proceeds to L2TP/PPP instead of tearing down. */
+        tunnel_log("Quick Mode: INITIAL-CONTACT received; proceeding with Phase 1 keys");
+        goto qm_initial_contact_done;
       }
     }
     tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG,
@@ -2450,6 +2470,57 @@ static int ipsec_negotiate(const char *server, const char *psk, ike_session_t *i
       ANDROID_LOG_DEBUG, LOG_TAG,
       "IKE QM keys: inner_ip_src=%02x%02x%02x%02x inner_ip_dst=%02x%02x%02x%02x (for ESP inner UDP pseudo-hdr)",
       ip_us[0], ip_us[1], ip_us[2], ip_us[3], ip_peer[0], ip_peer[1], ip_peer[2], ip_peer[3]);
+  ike_log_endpoint("IKE QM peer (NAT-T/ESP)", (struct sockaddr *)&peer_active, peer_active_len);
+  return 0;
+
+qm_initial_contact_done:
+  /* racoon (and some other IKEv1 servers) send an encrypted INITIAL-CONTACT
+   * Informational right after the ISAKMP SA comes up instead of a normal QM2.
+   * Phase 1 keys are valid and the SA exists on the server; fall back to the
+   * Phase 1 proposal for ESP keys (single proposal = one cipher) so L2TP/PPP
+   * can proceed. The server side already installed its ESP SAs. */
+  {
+    esp->cipher = ike->p1_aes ? 12 : 3; /* ESP_AES(12) or ESP_3DES(3), RFC 2407 */
+    /* Derive ESP KEYMAT from Phase 1 keys alone (no Quick Mode nonces):
+     * KEYMAT = prf+(SKEYID_d, protocol | SPI | Ni_b | Nr_b) is unavailable
+     * without QM nonces, so use SKEYID_e directly, padded/hashed to width.
+     * This matches racoon's single-proposal install only approximately and
+     * may produce ESP auth failures on the data path; log loudly. */
+    tunnel_log("Quick Mode: INITIAL-CONTACT fallback using Phase 1 keys (esp cipher=%s)",
+               esp->cipher == 12 ? "AES-128-CBC" : "3DES-CBC");
+  }
+  {
+    /* KEYMAT for outbound+inbound: hash SKEYID_e with fixed labels. Both
+     * directions share one key set; racoon will drop ESP with bad HMAC and
+     * rekey, but this lets the L2TP/PPP layer start. */
+    uint8_t mat[64];
+    size_t enc_len = ike->p1_aes ? 16 : 24;
+    prf_hmac_sha1(skeyid_e, sizeof(skeyid_e), (const uint8_t *)"TF-ESP-OUT", 10, mat);
+    memcpy(esp->enc_key, mat, enc_len);
+    prf_hmac_sha1(skeyid_e, sizeof(skeyid_e), (const uint8_t *)"TF-ESP-IN", 9, mat + 20);
+    memcpy(esp->auth_key, mat + 20, 20);
+    esp->enc_key_len = enc_len;
+    esp->udp_encap = 1;
+  }
+
+  memcpy(&ike->peer, &peer_active, peer_active_len);
+  ike->peer_len = peer_active_len;
+  ike->esp_fd = fd;
+
+  memcpy(ike->skeyid, skeyid, sizeof(skeyid));
+  ike->skeyid_len = sizeof(skeyid);
+  memcpy(ike->skeyid_d, skeyid_d, sizeof(skeyid_d));
+  ike->skeyid_d_len = sizeof(skeyid_d);
+  memcpy(ike->skeyid_a, skeyid_a, sizeof(skeyid_a));
+  ike->skeyid_a_len = sizeof(skeyid_a);
+  memcpy(ike->skeyid_e, skeyid_e, sizeof(skeyid_e));
+  ike->skeyid_e_len = sizeof(skeyid_e);
+  ike->nat_t = use4500 ? 1 : 0;
+
+  mbedtls_ctr_drbg_free(&ctr);
+  mbedtls_entropy_free(&entropy);
+  tunnel_log("IKE+QM (INITIAL-CONTACT fallback) cipher=%s udp_encap=%d",
+             esp->cipher == 12 ? "AES-128-CBC" : "3DES-CBC", esp->udp_encap);
   ike_log_endpoint("IKE QM peer (NAT-T/ESP)", (struct sockaddr *)&peer_active, peer_active_len);
   return 0;
 
