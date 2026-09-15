@@ -741,7 +741,8 @@ int l2tp_data_extract_ppp(const uint8_t *plain, size_t plain_len, const l2tp_ses
     }
     off += (size_t)osize;
   }
-  if (s != NULL && (tid != s->peer_tunnel_id || sid != s->peer_session_id)) {
+  if (s != NULL && !((tid == s->peer_tunnel_id && sid == s->peer_session_id) ||
+                     (tid == s->tunnel_id && sid == s->session_id))) {
     if (diag)
       l2tp_warn_data_extract("tid_sid_mismatch", flags, plain_len, s, tid, sid, 1);
     return -1;
