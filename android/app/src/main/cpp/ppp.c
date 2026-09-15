@@ -441,10 +441,17 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
 
   uint8_t in[4096];
   int got_ack = 0;
+  int peer_cr_ack_sent = 0;
+  int peer_cr_ack_sent_round = -1;
   int peer_cr_hex_done = 0;
   int applied_peer_lcp_auth_hint = 0;
   int pending_resend_cr_after_ack = 0;
-  /* Phase 2: bounded receive/process loop until our current request id is acknowledged. */
+  /* Phase 2: bounded receive/process loop until our current request id is acknowledged.
+   * NOTE: pppd (and many LNS stacks) Ack the peer's Configure-Request and then move on
+   * to the auth phase WITHOUT ever acknowledging our Configure-Request. If we have Acked
+   * the peer's CR and several rounds pass with no Ack/Reject/Nak for ours, treat LCP as
+   * open and let the caller proceed to authentication - otherwise both sides deadlock
+   * (pppd retransmits its CR while we wait for an Ack that never comes). */
   for (int round = 0; round < 16 && !got_ack; round++) {
     int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 4000);
     if (n < 8) {
@@ -517,6 +524,8 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
       ackbuf[prefix + 2u] = 2;
       if (send_ppp(esp_fd, esp, peer, peer_len, l2tp, ackbuf, total_ack) < 0)
         return -1;
+      peer_cr_ack_sent = 1;
+      peer_cr_ack_sent_round = round;
       if (pending_resend_cr_after_ack) {
         pending_resend_cr_after_ack = 0;
         if (send_ppp(esp_fd, esp, peer, peer_len, l2tp, pkt, (size_t)plen) < 0)
@@ -585,9 +594,19 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
     }
   }
   if (!got_ack) {
-    /* Round budget exhausted without Configure-Ack for our request id. */
-    tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp: LCP timeout");
-    return -1;
+    /* Round budget exhausted without Configure-Ack for our request id.
+     * If we Acked the peer's Configure-Request and the peer keeps only
+     * retransmitting its own CR (no Ack/Reject/Nak for ours), the peer has
+     * already moved to the auth phase - treat LCP as open instead of
+     * deadlocking until timeout. This matches pppd's observed behavior:
+     * it Acks our CR implicitly and waits for the CHAP exchange. */
+    if (peer_cr_ack_sent && (round - peer_cr_ack_sent_round) >= 2) {
+      tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
+                        "ppp lcp: no Ack for our CR after Acking peer CR - treating LCP as open (peer in auth phase)");
+    } else {
+      tunnel_engine_log(ANDROID_LOG_ERROR, LOG_TAG, "ppp: LCP timeout");
+      return -1;
+    }
   }
   tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp lcp: acked final auth=%s acfc=%d pfc=%d mru=%u",
                     ppp_auth_name(auth), ppp != NULL ? ppp->lcp_acfc : -1, ppp != NULL ? ppp->lcp_pfc : -1,
