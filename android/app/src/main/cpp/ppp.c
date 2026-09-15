@@ -443,6 +443,7 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   int got_ack = 0;
   int peer_cr_ack_sent = 0;
   int peer_ack_round = -1;
+  int last_round = 0;
   int peer_cr_hex_done = 0;
   int applied_peer_lcp_auth_hint = 0;
   int pending_resend_cr_after_ack = 0;
@@ -453,6 +454,7 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
    * open and let the caller proceed to authentication - otherwise both sides deadlock
    * (pppd retransmits its CR while we wait for an Ack that never comes). */
   for (int round = 0; round < 16 && !got_ack; round++) {
+    last_round = round;
     int n = recv_ppp(esp_fd, esp, l2tp, in, sizeof(in), 4000);
     if (n < 8) {
       tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG, "ppp lcp: recv below minimum n=%d round=%d", n, round);
@@ -600,7 +602,7 @@ static int ppp_lcp_negotiate(int esp_fd, esp_keys_t *esp, const struct sockaddr 
      * already moved to the auth phase - treat LCP as open instead of
      * deadlocking until timeout. This matches pppd's observed behavior:
      * it Acks our CR implicitly and waits for the CHAP exchange. */
-    if (peer_cr_ack_sent && (round - peer_ack_round) >= 2) {
+    if (peer_cr_ack_sent && (last_round - peer_ack_round) >= 2) {
       tunnel_engine_log(ANDROID_LOG_WARN, LOG_TAG,
                         "ppp lcp: no Ack for our CR after Acking peer CR - treating LCP as open (peer in auth phase)");
     } else {
