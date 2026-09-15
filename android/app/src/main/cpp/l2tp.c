@@ -769,13 +769,13 @@ int l2tp_send_ppp(int esp_fd, esp_keys_t *esp, const struct sockaddr *peer, sock
   util_write_be16(pkt + 2, (uint16_t)tot);
   /* xl2tpd routes inbound data by payload tid == ITS OWN tunnel id (the tid
    * it assigned, which we know as s->tunnel_id from SCCRP AVP 9), and
-   * cid == the call id the CLIENT assigned (c->ourcid in xl2tpd terms, our
-   * s->peer_session_id from ICRQ AVP 14). Verified by xl2tpd logs:
-   * "Connection established ... Local: 44014, Remote: 4097" followed by
-   * "Can not find tunnel 4097" for every data packet - the payload tid must
-   * be 44014 (xl2tpd's own), not 4097. */
+   * cid == the call/session id IT assigned to our call (c->ourframed cid in
+   * xl2tpd terms, our s->session_id from ICRP AVP 14; matches the server log
+   * "Call established ... Local: 49497, Remote: 22668"). The client-assigned
+   * sid (s->peer_session_id, sent in ICRQ AVP 14) is only what xl2tpd uses to
+   * address data BACK to us. */
   util_write_be16(pkt + 4, s->tunnel_id);
-  util_write_be16(pkt + 6, s->peer_session_id);
+  util_write_be16(pkt + 6, s->session_id);
   memcpy(pkt + 8, ppp, ppp_len);
   return esp_encrypt_send(esp_fd, esp, peer, peer_len, pkt, tot);
 }
