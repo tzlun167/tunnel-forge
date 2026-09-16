@@ -27,6 +27,10 @@
 #define PROTO_PAP 0xc023u
 #define PROTO_CHAP 0xc223u
 #define PROTO_IPCP 0x8021u
+/** CCP (compression, RFC 1962); pppd keeps offering it - we send LCP Protocol-Reject. */
+#define PROTO_CCP 0x80fdu
+/** IPv6 (IANA); IPv4-only link - outbound IPv6 from TUN is dropped, inbound gets Protocol-Reject. */
+#define PROTO_IPV6 0x0057u
 /** IPv6CP (IANA / RFC 5072); gateway may offer after IPv4 IPCP - we send LCP Protocol-Reject. */
 #define PROTO_IPV6CP 0x8057u
 #define LCP_CODE_PROTOCOL_REJECT 8u
@@ -1399,6 +1403,18 @@ int ppp_encapsulate_and_send(int esp_fd, esp_keys_t *esp, const struct sockaddr 
   if (prefix == 0u || len + prefix > sizeof(buf))
     return -1;
   engine_dp_note_tun_ipv4_outbound(ip_packet, len);
+  /* IPv6 datagrams from TUN cannot traverse the IPv4-only PPP link; pppd silently
+   * discards 0x0021 frames whose payload is not IPv4. Drop them here instead of
+   * encapsulating garbage (kernel IPv6 RS/NS on a link with ::/0 unreachable). */
+  if (len >= 1u && (ip_packet[0] >> 4) != 4u) {
+    static time_t s_last_nonv4_drop_warn;
+    time_t now_v4 = time(NULL);
+    if (now_v4 - s_last_nonv4_drop_warn >= 60) {
+      s_last_nonv4_drop_warn = now_v4;
+      tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "ppp outbound: dropped non-IPv4 TUN datagram len=%zu", len);
+    }
+    return 0;
+  }
   uint8_t *inner_ip = buf + prefix;
   memcpy(inner_ip, ip_packet, len);
   tf_ipv4_info_t ipv4_info;
@@ -1593,6 +1609,18 @@ int ppp_dispatch_ppp_frame(int esp_fd, esp_keys_t *esp, const struct sockaddr *p
           s_ipv6cp_info_once = 1;
           tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "IPv6CP: sent LCP Protocol-Reject (IPv4-only link)");
         }
+      }
+    }
+    return 0;
+  }
+  /* 0x80fd: CCP not supported; RFC 1661 Protocol-Reject makes pppd stop retransmitting. */
+  if (proto == PROTO_CCP) {
+    static int s_ccp_reject_once;
+    if (esp != NULL && peer != NULL && l2tp != NULL) {
+      if (ppp_send_lcp_protocol_reject(esp_fd, esp, peer, peer_len, l2tp, ppp, PROTO_CCP, p, len) >= 0 &&
+          !s_ccp_reject_once) {
+        s_ccp_reject_once = 1;
+        tunnel_engine_log(ANDROID_LOG_DEBUG, LOG_TAG, "CCP: sent LCP Protocol-Reject (compression not supported)");
       }
     }
     return 0;
